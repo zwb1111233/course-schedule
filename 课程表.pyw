@@ -737,7 +737,7 @@ class App(tk.Tk):
             return
         S, period_h = self.S, self.row_h
         break_h = int(BREAK_H * S)
-        left_w, top_h = int(52 * S), int(52 * S)
+        left_w, top_h = int(64 * S), int(52 * S)
         card_r, margin = int(16 * S), int(6 * S)
         card_x1 = w - margin
         col_w = (card_x1 - left_w) / 7
@@ -766,8 +766,8 @@ class App(tk.Tk):
                 y += break_h
         grid_h = y - top_h
 
-        # 白色大圆角卡片承载整个网格
-        rrect(left_w - int(8 * S), int(2 * S), card_x1, top_h + grid_h + int(10 * S),
+        # 白色大圆角卡片承载整个网格(从日历列左缘开始,不遮挡左侧时间轴)
+        rrect(left_w, int(2 * S), card_x1, top_h + grid_h + int(10 * S),
               r=card_r, fill=CARD, outline="")
 
         # 日期表头:今天为主题蓝药丸,其余为纯文字
@@ -783,14 +783,15 @@ class App(tk.Tk):
                            fill="#FFFFFF" if is_today else TXT,
                            font=("Microsoft YaHei UI", 10, "bold"))
 
-        # 左轴:节号 + 起止时间
+        # 左轴:节号 + 起止时间(与卡片保持间隙)
         for num, ps, pe in PERIODS:
             y0 = ys[num]
-            cv.create_text(left_w - 6, y0 + int(5 * S), text=str(num), anchor="ne",
+            ax = left_w - int(12 * S)
+            cv.create_text(ax, y0 + int(5 * S), text=str(num), anchor="ne",
                            fill=TXT, font=("Microsoft YaHei UI", 10, "bold"))
-            cv.create_text(left_w - 6, y0 + int(25 * S), text=ps, anchor="ne",
+            cv.create_text(ax, y0 + int(25 * S), text=ps, anchor="ne",
                            fill=TXT2, font=("Microsoft YaHei UI", 7))
-            cv.create_text(left_w - 6, y0 + int(37 * S), text=pe, anchor="ne",
+            cv.create_text(ax, y0 + int(37 * S), text=pe, anchor="ne",
                            fill=TXT2, font=("Microsoft YaHei UI", 7))
 
         # 节次分隔线与午休/晚休带
