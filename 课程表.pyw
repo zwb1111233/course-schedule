@@ -619,6 +619,7 @@ class App(tk.Tk):
         super().__init__()
         self.ui_queue = ui_queue
         self.week_offset = 0
+        self._hover = None
         self.S = system_scale_factor()          # 屏幕缩放系数(高 DPI 屏上界面等比放大)
         self.row_h = int(PERIOD_ROW_H * self.S)  # 每节课行高(随缩放)
         self.title("我的课程表")
@@ -716,6 +717,21 @@ class App(tk.Tk):
         self.canvas.bind("<Configure>", lambda e: self.draw_schedule())
         self.canvas.bind("<MouseWheel>", self._on_wheel)
         self.canvas.bind("<Button-1>", self._on_canvas_click)
+        self.canvas.bind("<Motion>", self._on_canvas_motion)
+        self.canvas.bind("<Leave>", lambda e: self._set_hover(None))
+
+    def _on_canvas_motion(self, e):
+        y = self.canvas.canvasy(e.y)
+        for y0, y1, num in getattr(self, "_row_map", []):
+            if y0 <= y < y1:
+                self._set_hover(num)
+                return
+        self._set_hover(None)
+
+    def _set_hover(self, num):
+        if getattr(self, "_hover", None) != num:
+            self._hover = num
+            self.draw_schedule()
 
     def _on_wheel(self, e):
         self.canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
@@ -737,9 +753,12 @@ class App(tk.Tk):
             return
         S, period_h = self.S, self.row_h
         break_h = int(BREAK_H * S)
-        left_w, top_h = int(64 * S), int(52 * S)
-        card_r, margin = int(16 * S), int(6 * S)
-        card_x1 = w - margin
+        margin = int(6 * S)
+        axis_w = int(46 * S)
+        left_w = margin + axis_w          # 日历列起点(时间轴并入卡片首列)
+        top_h = int(52 * S)
+        card_r = int(16 * S)
+        card_x0, card_x1 = margin, w - margin
         col_w = (card_x1 - left_w) / 7
         monday = self.monday_of_view()
         today = dt.date.today()
@@ -752,23 +771,42 @@ class App(tk.Tk):
         def rrect(x0, y0, x1, y1, r, **kw):
             return cv.create_polygon(*_rrect_pts(x0, y0, x1, y1, r), smooth=True, **kw)
 
-        # 先做布局:各节次行的 y 与当前时间线定位段
+        # 布局:各节次行 y、当前时间线定位段、悬停行映射
         ys = {}
-        seg = []          # (开始分钟, 结束分钟, y0, y1)
+        seg = []
+        row_map = []
         y = top_h
         for idx, (num, ps, pe) in enumerate(PERIODS):
             ps_m, pe_m = parse_hhmm(ps), parse_hhmm(pe)
             ys[num] = y
             seg.append((ps_m, pe_m, y, y + period_h))
+            row_map.append((y, y + period_h, num))
             y += period_h
-            if num in BREAK_AFTER and idx + 1 < len(PERIODS):
-                seg.append((pe_m, parse_hhmm(PERIODS[idx + 1][1]), y, y + break_h))
+            if num in BREAK_AFTER:
+                row_map.append((y, y + break_h, None))
+                if idx + 1 < len(PERIODS):
+                    seg.append((pe_m, parse_hhmm(PERIODS[idx + 1][1]), y, y + break_h))
                 y += break_h
         grid_h = y - top_h
+        self._row_map = row_map
 
-        # 白色大圆角卡片承载整个网格(从日历列左缘开始,不遮挡左侧时间轴)
-        rrect(left_w, int(2 * S), card_x1, top_h + grid_h + int(10 * S),
+        # 白色大圆角卡片(时间轴并入卡片第一列)
+        rrect(card_x0, int(2 * S), card_x1, top_h + grid_h + int(10 * S),
               r=card_r, fill=CARD, outline="")
+
+        # 隔行底纹(按课位成对着色),强化"时间行 ↔ 课程"的横向对应
+        for num in ys:
+            if (num - 1) // 2 % 2 == 0:
+                cv.create_rectangle(card_x0 + int(4 * S), ys[num],
+                                    card_x1 - int(4 * S), ys[num] + period_h,
+                                    fill="#F8F9FB", outline="")
+
+        # 悬停行高亮带(该节次整行淡蓝,时间同步高亮)
+        hover = self._hover if self._hover in ys else None
+        if hover is not None:
+            cv.create_rectangle(card_x0 + int(4 * S), ys[hover],
+                                card_x1 - int(4 * S), ys[hover] + period_h,
+                                fill="#E6F0FD", outline="")
 
         # 日期表头:今天为主题蓝药丸,其余为纯文字
         for i, dn in enumerate(DAY_NAMES):
@@ -783,34 +821,37 @@ class App(tk.Tk):
                            fill="#FFFFFF" if is_today else TXT,
                            font=("Microsoft YaHei UI", 10, "bold"))
 
-        # 左轴:节号 + 起止时间(与卡片保持间隙)
+        # 左轴:节号居中,起止时间分别贴住行的上/下边界线
+        ax = left_w - int(10 * S)
         for num, ps, pe in PERIODS:
-            y0 = ys[num]
-            ax = left_w - int(12 * S)
-            cv.create_text(ax, y0 + int(5 * S), text=str(num), anchor="ne",
-                           fill=TXT, font=("Microsoft YaHei UI", 10, "bold"))
-            cv.create_text(ax, y0 + int(25 * S), text=ps, anchor="ne",
-                           fill=TXT2, font=("Microsoft YaHei UI", 7))
-            cv.create_text(ax, y0 + int(37 * S), text=pe, anchor="ne",
-                           fill=TXT2, font=("Microsoft YaHei UI", 7))
+            y0, y1 = ys[num], ys[num] + period_h
+            on = (num == hover)
+            c_time = ACCENT if on else "#6E6E73"
+            f_time = ("Microsoft YaHei UI", 8, "bold" if on else "normal")
+            cv.create_text(ax, y0 + int(2 * S), text=ps, anchor="ne", fill=c_time, font=f_time)
+            cv.create_text(ax, y1 - int(2 * S), text=pe, anchor="se", fill=c_time, font=f_time)
+            cv.create_text(ax, (y0 + y1) / 2, text=str(num), anchor="e",
+                           fill=ACCENT if on else TXT,
+                           font=("Microsoft YaHei UI", 10, "bold"))
 
-        # 节次分隔线与午休/晚休带
+        # 节次分隔线(贯穿时间轴与日历区)与午休/晚休带
         for idx, (num, ps, pe) in enumerate(PERIODS):
             y0 = ys[num]
             if num in BREAK_AFTER:
                 yb = y0 + period_h
-                rrect(left_w + int(8 * S), yb + int(3 * S), card_x1 - int(8 * S),
+                rrect(card_x0 + int(8 * S), yb + int(3 * S), card_x1 - int(8 * S),
                       yb + break_h - int(3 * S), r=int(9 * S), fill="#F2F2F4", outline="")
                 cv.create_text((left_w + card_x1) / 2, yb + break_h / 2, text=BREAK_AFTER[num],
                                fill=TXT2, font=("Microsoft YaHei UI", 8))
             elif idx + 1 < len(PERIODS):
-                cv.create_line(left_w, y0 + period_h, card_x1, y0 + period_h, fill=LINE)
+                cv.create_line(card_x0 + int(8 * S), y0 + period_h, card_x1 - int(8 * S),
+                               y0 + period_h, fill="#E8E8EC")
 
         for i in range(8):
             x = left_w + i * col_w
             cv.create_line(x, top_h, x, top_h + grid_h, fill=LINE)
 
-        # 课程块:马卡龙浅底 + 同色系深字,按节次跨度放置
+        # 课程块:马卡龙浅底 + 同色系深字(时间行更深),按节次跨度放置
         self._block_map = []
         avail = col_w - 18
         for c in _data["courses"]:
@@ -828,32 +869,33 @@ class App(tk.Tk):
             x1 = left_w + (c["weekday"] + 1) * col_w - int(5 * S)
             y0 = ys[covered[0]] + int(3 * S)
             y1 = ys[covered[-1]] + period_h - int(3 * S)
-            fill, t_main, t_sub = card_colors(COURSE_COLORS[c.get("color", 0) % len(COURSE_COLORS)])
+            base = COURSE_COLORS[c.get("color", 0) % len(COURSE_COLORS)]
+            fill, t_main, t_sub = card_colors(base)
+            t_time = blend_hex(base, "#000000", 0.32)
             rrect(x0, y0, x1, y1, r=int(12 * S), fill=fill, outline="")
 
-            # 内容条目:名称加粗,其余小字;放不下时依次省略教师、地点
-            entries = [(c["name"], 9, True), (f"{c['start']}–{c['end']}", 8, False)]
+            # 内容条目:名称加粗,时间加深,其余小字;放不下时依次省略教师、地点
+            entries = [(c["name"], 9, True, t_main), (f"{c['start']}–{c['end']}", 8, False, t_time)]
             if c.get("location"):
-                entries.append((c["location"], 8, False))
+                entries.append((c["location"], 8, False, t_sub))
             if c.get("teacher"):
-                entries.append((c["teacher"], 8, False))
+                entries.append((c["teacher"], 8, False, t_sub))
 
             def nlines(text, pt, bold):
                 fpx = pt * S * 4 / 3 * (1.06 if bold else 1.0)
                 tw = sum(fpx * (1.0 if ord(ch) > 0x2E80 else 0.56) for ch in text)
                 return max(1, math.ceil(tw / avail))
 
-            heights = [nlines(t, p, b) * p * S * 4 / 3 * 1.32 for t, p, b in entries]
+            heights = [nlines(t, p, b) * p * S * 4 / 3 * 1.32 for t, p, b, _ in entries]
             while len(entries) > 2 and sum(heights) > (y1 - y0) - int(10 * S):
                 entries.pop()
                 heights.pop()
             total = sum(heights)
             ty = y0 + max(int(4 * S), ((y1 - y0) - total) / 2)
-            for (text, pt, bold), h in zip(entries, heights):
+            for (text, pt, bold, col), h in zip(entries, heights):
                 cv.create_text((x0 + x1) / 2, ty, text=text, anchor="n", width=avail,
-                               fill=t_main if bold else t_sub,
-                               font=("Microsoft YaHei UI", pt,
-                                     "bold" if bold else "normal"))
+                               fill=col, font=("Microsoft YaHei UI", pt,
+                                               "bold" if bold else "normal"))
                 ty += h
             self._block_map.append((x0, y0, x1, y1, c))
 
